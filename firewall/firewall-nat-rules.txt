@@ -1,0 +1,136 @@
+Firewall and NAT Rules - pfSense UTM
+====================================
+
+Environment Overview
+--------------------
+Edge firewall: pfSense 2.8.x running as a VMware VM
+WAN (em0): DHCP from VMware NAT (e.g., 192.168.233.x/24)
+LAN (em1): 192.168.10.2/30
+Upstream router (R1): 192.168.10.1/30 on FastEthernet1/0
+Internal LAN behind R1: 10.10.1.0/24 (PC1 10.10.1.10, PC2 10.10.1.11)
+
+Goal
+----
+Provide secure internet access for the 10.10.1.0/24 LAN via pfSense, while
+restricting risky services such as SSH and keeping a default deny policy
+for inbound traffic from the internet.
+
+----------------------------------
+Outbound NAT (Source NAT / PAT)
+----------------------------------
+
+Rule N1 - PAT for internal LAN
+  Type: Outbound NAT (automatic or hybrid)
+  Interface: WAN (em0)
+  Source network: 10.10.1.0/24
+  Destination: any
+  Translation address: WAN address (interface address)
+  Translation type: Port Address Translation (PAT)
+  Description: "PAT - 10.10.1.0/24 to internet"
+
+Effect:
+  All hosts on 10.10.1.0/24 appear on the internet with the pfSense WAN IP.
+  Internal addressing 10.10.1.x/24 remains hidden.
+
+----------------------------------
+LAN Interface Firewall Rules
+----------------------------------
+
+Rules are evaluated top-down; first match wins. Default policy is deny.
+
+Rule F1 - Allow web browsing (HTTP/HTTPS)
+  Interface: LAN
+  Action: Pass
+  Protocol: TCP
+  Source: 10.10.1.0/24
+  Destination: any
+  Destination ports: 80 (HTTP), 443 (HTTPS)
+  Description: "Allow LAN HTTP/HTTPS to internet"
+
+Rule F2 - Allow DNS lookups
+  Interface: LAN
+  Action: Pass
+  Protocol: TCP/UDP
+  Source: 10.10.1.0/24
+  Destination: any
+  Destination port: 53 (DNS)
+  Description: "Allow LAN DNS queries"
+
+Rule F3 - Block SSH from user subnet
+  Interface: LAN
+  Action: Block (log enabled)
+  Protocol: TCP
+  Source: 10.10.1.0/24
+  Destination: any
+  Destination port: 22 (SSH)
+  Description: "Block SSH from 10.10.1.0/24"
+
+Rule F4 - Allow ICMP from management host (optional)
+  Interface: LAN
+  Action: Pass
+  Protocol: ICMP
+  Source: 10.10.1.10 (PC1 - management/test host)
+  Destination: any
+  Description: "Allow ping from management host"
+
+Rule F5 - Default deny (implicit)
+  Interface: LAN
+  Action: (implicit block)
+  Protocol: any
+  Source: any
+  Destination: any
+  Description: "Implicit deny for unmatched traffic"
+
+----------------------------------
+WAN Interface Firewall Rules
+----------------------------------
+
+Rule W1 - Default inbound deny
+  Interface: WAN
+  Action: Block
+  Protocol: any
+  Source: any (internet)
+  Destination: any (internal)
+  Description: "Block all unsolicited inbound traffic from internet"
+
+Rule W2 - Allow established/related states (automatically handled)
+  Interface: WAN
+  Action: Pass
+  State: established, related
+  Description: "Allow return traffic for connections initiated from inside"
+
+----------------------------------
+Testing Scenarios
+----------------------------------
+
+Test 1 - Web access
+  From PC1/PC2 (10.10.1.10 / 10.10.1.11):
+    - Ping the router (10.10.1.1)
+    - Browse to any website or curl to a known IP
+  Expected: HTTP/HTTPS work due to Rule F1 + NAT rule N1.
+
+Test 2 - DNS resolution
+  From PC1/PC2:
+    - Use nslookup or dig against 8.8.8.8
+  Expected: Successful DNS queries due to Rule F2.
+
+Test 3 - SSH blocked
+  From PC1/PC2:
+    - Attempt SSH to any external IP or test host
+  Expected: Connection blocked and logged due to Rule F3.
+
+Test 4 - Ping allowed from management host only
+  From PC1 (10.10.1.10):
+    - Ping an external IP (for example, 8.8.8.8)
+  Expected: ICMP allowed via Rule F4.
+  From PC2 (10.10.1.11):
+    - Same ping test
+  Expected: Blocked by default deny if ICMP is not covered by other rules.
+
+Summary
+-------
+These firewall and NAT rules implement:
+- Source NAT (PAT) at the edge for the 10.10.1.0/24 LAN
+- Controlled outbound access (web + DNS allowed)
+- Explicit blocking of risky services (SSH) from user subnet
+- Default deny posture for unsolicited inbound internet traffic
